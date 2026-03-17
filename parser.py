@@ -38,7 +38,20 @@ logger = logging.getLogger(__name__)
 
 # Конфигурация
 PARSER_INTERVAL = int(os.getenv("PARSER_INTERVAL", "30"))  # минут
-POST_INTERVAL = 60  # 1 пост в час
+POST_INTERVAL = int(os.getenv("POST_INTERVAL", "120"))  # минут между постами (2 часа по умолчанию)
+
+# Ночной перерыв (часы в timezone сервера)
+QUIET_HOURS_START = int(os.getenv("QUIET_HOURS_START", "1"))   # 1:00
+QUIET_HOURS_END = int(os.getenv("QUIET_HOURS_END", "7"))       # 7:00
+
+
+def is_quiet_hours() -> bool:
+    """Проверка: сейчас ночное время (публикация приостановлена)"""
+    hour = datetime.now().hour
+    if QUIET_HOURS_START <= QUIET_HOURS_END:
+        return QUIET_HOURS_START <= hour < QUIET_HOURS_END
+    else:  # Переход через полночь (например, 23:00-6:00)
+        return hour >= QUIET_HOURS_START or hour < QUIET_HOURS_END
 
 
 def fetch_article_content(url: str) -> str:
@@ -697,6 +710,11 @@ async def parse_and_send(sources: List[str] = None):
 
 async def post_from_queue():
     """Опубликовать одну новость из очереди с AI-суммаризацией"""
+    # Проверяем ночной перерыв
+    if is_quiet_hours():
+        logger.info(f"🌙 Ночное время ({QUIET_HOURS_START}:00-{QUIET_HOURS_END}:00), публикация приостановлена")
+        return False
+    
     queue = load_queue()
     
     if not queue:
@@ -760,8 +778,9 @@ async def post_from_queue():
 
 async def main():
     """Основная функция"""
-    logger.info("🤖 Запуск Tech News Parser v2.4 (AI-powered + fallback)...")
-    logger.info(f"📅 Режим: 1 пост каждые {POST_INTERVAL} минут")
+    logger.info("🤖 Запуск Tech News Parser v2.6 (AI-powered + schedule)")
+    logger.info(f"📅 Расписание: пост каждые {POST_INTERVAL} минут")
+    logger.info(f"🌙 Ночной перерыв: {QUIET_HOURS_START}:00-{QUIET_HOURS_END}:00")
     if GEMINI_API_KEY:
         logger.info("🧠 AI-суммаризация: ВКЛЮЧЕНА")
         logger.info("🔄 Fallback перевод: ВКЛЮЧЁН (при rate limit)")
@@ -770,8 +789,14 @@ async def main():
 
     while True:
         try:
+            # Парсим новости в любое время
             await parse_and_send()
-            await post_from_queue()
+            
+            # Публикуем только вне тихих часов
+            if not is_quiet_hours():
+                await post_from_queue()
+            else:
+                logger.info(f"🌙 Ночной перерыв, публикация пропущена")
         except Exception as e:
             logger.error(f"Ошибка в цикле: {e}")
 
